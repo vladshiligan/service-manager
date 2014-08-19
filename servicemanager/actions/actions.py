@@ -1,12 +1,20 @@
 #!/usr/bin/env python
 import os
+import sys
 import time
 import calendar
 import glob
 
-from servicemanager import subprocess
-from servicemanager.smcontext import ServiceManagerException
-from servicemanager.smprocess import SmProcess
+import subprocess
+
+
+def _start_services(context, service_names, fatjar, release, wait, proxy):
+    for service_name in service_names:
+        start_one(context, service_name, fatjar, release, proxy)
+
+    if wait:
+        _wait_for_services(context, service_names, wait)
+
 
 def start_one(context, service_name, fatjar, release, proxy, port=None):
     if release:
@@ -29,16 +37,6 @@ def start_one(context, service_name, fatjar, release, proxy, port=None):
 
     return False
 
-def get_start_cmd(context, service_name, fatjar, release, proxy, port=None):
-    if release:
-        run_from = "RELEASE"
-    elif fatjar:
-        run_from = "SNAPSHOT"
-    else:
-        run_from = "SOURCE"
-
-    starter = context.get_service_starter(service_name, run_from, proxy, None, None, port)
-    return starter.get_start_command(run_from)
 
 def stop_profile(context, profile):
     for service_name in context.application.services_for_profile(profile):
@@ -57,9 +55,6 @@ def _wait_for_services(context, service_names, seconds_to_wait):
         if "healthcheck" in context.service_data(service_name):
             waiting_for_services += [context.get_service(service_name)]
 
-    if not seconds_to_wait:
-        seconds_to_wait = 0
-
     end_time = _now() + seconds_to_wait
 
     while waiting_for_services and _now() < end_time:
@@ -71,8 +66,7 @@ def _wait_for_services(context, service_names, seconds_to_wait):
             if _now() >= end_time:
                 break
 
-            processes = SmProcess.processes_matching(service.pattern)
-            if all(map(service.run_healthcheck, processes)):
+            if service.run_healthcheck:
                 print "Service '%s' has started successfully" % service.service_name
                 waiting_for_services.remove(service)
             else:
@@ -87,7 +81,11 @@ def _wait_for_services(context, service_names, seconds_to_wait):
         services_timed_out = []
         for service in waiting_for_services:
             services_timed_out += [service.service_name]
-        raise ServiceManagerException("Timed out starting service(s): %s" % ", ".join(services_timed_out))
+        print "Timed out starting service(s): %s" % ", ".join(services_timed_out)
+        sys.exit(-1)
+    else:
+        print "All services passed healthcheck"
+
 
 def clean_logs(context, service_name):
     data = context.service_data(service_name)
@@ -121,7 +119,8 @@ def _get_running_process_args(context, service_name):
     pattern = service.get_pattern()
 
     if service.is_started_on_default_port():
-        command = "ps -eo args | egrep '%s' | egrep -v 'egrep %s' | awk '{{print  } }'" % (pattern, pattern)
+#        command = "ps -eo args | egrep '%s' | egrep -v 'egrep %s' | awk '{{print  } }'" % (pattern, pattern)
+        command = "wmic process where \"CommandLine like '%pattern%'\" get CommandLine"
         ps_command = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
         ps_output = ps_command.stdout.read()
 
@@ -139,6 +138,7 @@ def _get_git_rev(context, service_name):
 
     return ""
 
+
 def display_info(context, service_name):
     arguments = _get_running_process_args(context, service_name)
     git_revision = _get_git_rev(context, service_name)
@@ -152,18 +152,3 @@ def display_info(context, service_name):
     if arguments == "":
         comments += "(Not Running) "
     print "| " + comments
-
-
-def start_and_wait(service_resolver, context, start, fatjar, release, proxy, port, seconds_to_wait):
-
-    all_services = service_resolver.resolve_services_from_array(start)
-    for service_name in all_services:
-        if context.has_service(service_name):
-            start_one(context, service_name, fatjar, release, proxy, overridden_port(start, port))
-        else:
-            print "The requested service %s does not exist" % service_name
-
-    if seconds_to_wait:
-        _wait_for_services(context, all_services, seconds_to_wait)
-
-    print "All services passed healthcheck"

@@ -1550,9 +1550,9 @@ class Popen(object):
             self.send_signal(signal.SIGTERM)
 
         def kill(self):
-            """Kill the process with SIGKILL
+            """Kill the process with SIGTERM
             """
-            self.send_signal(signal.SIGKILL)
+            self.send_signal(signal.SIGTERM)
 
 
 def _demo_posix():
